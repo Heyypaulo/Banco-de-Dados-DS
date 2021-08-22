@@ -9,7 +9,7 @@
 ############################ REQUISITOS FUNCIONAIS ##############################
 # Cadastrar Cliente, Cadastrar Funcionário, Vender Produto, Abrir Caixa         #
 # Fazer Login, Cadastrar Produto, Lançar gasto, Fechar caixa, Consultar         #
-# estoque, Devolver produto, Consultar cliente, Repor estoque, Menu             #
+# estoque, Devolver produto, Consultar cliente, Repor estoque             #
 #################################################################################
 
 ############################## BANCO DE DADOS ###################################
@@ -79,6 +79,14 @@ CREATE TABLE tb_funcionario (
     dataAdmissao_func date not null
 );
 
+CREATE TABLE tb_gerente (
+    Cod_gerente int not null PRIMARY KEY auto_increment
+);
+
+CREATE TABLE tb_proprietario (
+    Cod_prop int not null PRIMARY KEY auto_increment
+);
+
 CREATE TABLE tb_cliente (
     Cod_cli int not null PRIMARY KEY auto_increment
 );
@@ -130,6 +138,20 @@ ADD FOREIGN KEY (cod_pfisica_fk)
 REFERENCES tb_pessoa_fisica(cod_pfisica);
 
 ALTER TABLE tb_cliente
+ADD COLUMN cod_pjuridica_fk int,
+ADD FOREIGN KEY (cod_pjuridica_fk) 
+REFERENCES tb_pessoa_juridica(cod_pjuridica);
+
+###################### ADICIONANDO FKS DE GERENTE #########################
+
+ALTER TABLE tb_gerente
+ADD COLUMN cod_func_fk int,
+ADD FOREIGN KEY (cod_func_fk) 
+REFERENCES tb_funcionario(Cod_func);
+
+###################### ADICIONANDO FKS DE PROPRIETÁRIO #########################
+
+ALTER TABLE tb_proprietario
 ADD COLUMN cod_pjuridica_fk int,
 ADD FOREIGN KEY (cod_pjuridica_fk) 
 REFERENCES tb_pessoa_juridica(cod_pjuridica);
@@ -346,12 +368,31 @@ DECLARE pegarpreco FLOAT;
 DECLARE verificar_estoque INT;
 DECLARE verificar_vendedor VARCHAR(100);
 DECLARE saldoCaixa DOUBLE;
+DECLARE valorabertura DOUBLE;
+DECLARE valorsaida DOUBLE;
 
 SET verificar_vendedor= (SELECT nome_pfisica FROM tb_pessoa_fisica WHERE nome_pfisica = vendedor);
 SET verificar_estoque= (SELECT estoque_prod FROM tb_produto WHERE cod_prod = CodProds);
 SET pegarpreco = (SELECT preco_prod FROM tb_produto WHERE cod_prod= CodProds);
 SET PrecoVenda = pegarpreco * quantidade;
-SET saldoCaixa= (SELECT saldofinal_caixa FROM tb_Caixa WHERE cod_caixa = (SELECT MAX(cod_caixa) FROM tb_Caixa));
+SET valorabertura = (SELECT valorAbertura_caixa FROM tb_caixa WHERE cod_caixa = cod_caixa);
+SET valorsaida = (SELECT saidas_caixa FROM tb_caixa WHERE cod_caixa = cod_caixa);
+SET saldoCaixa = (SELECT saldofinal_caixa FROM tb_caixa WHERE cod_caixa = (SELECT MAX(cod_caixa) FROM tb_caixa));
+
+IF(valorabertura IS NULL) THEN
+	SET valorabertura = 0;
+END IF;
+
+IF(valorsaida IS NULL) THEN
+	SET valorsaida = 0;
+END IF;
+
+IF(saldoCaixa IS NULL) THEN
+	SET saldoCaixa = 0;
+END IF;
+
+SET saldoCaixa = saldoCaixa + ((valorabertura + PrecoVenda) - valorsaida);
+
 
 IF (quantidade <= verificar_estoque) THEN
     IF (vendedor = verificar_vendedor) THEN
@@ -368,8 +409,9 @@ START TRANSACTION;
 
 	IF NOT EXISTS (SELECT cod_caixa FROM tb_caixa WHERE funcionario_caixa = vendedor) THEN
     
-		INSERT INTO tb_caixa (cod_caixa, funcionario_caixa, entradas_caixa, saldofinal_caixa, cod_venda_fk) 
-		VALUES (null, vendedor, precoVenda, saldoCaixa, null);
+		INSERT INTO tb_caixa (cod_caixa, funcionario_caixa, valorAbertura_caixa, entradas_caixa, saidas_caixa, saldofinal_caixa, cod_venda_fk) 
+		VALUES (null, vendedor, valorabertura, precoVenda, valorsaida, saldoCaixa, null);
+        
         
     ELSE 
 		UPDATE tb_caixa SET entradas_caixa = entradas_caixa + precoVenda WHERE funcionario_caixa= vendedor;
@@ -410,3 +452,146 @@ END $$ DELIMITER ;
 
 CALL pr_CadastrarCliente (1);
 SELECT * FROM tb_cliente;
+
+###################### ABRIR CAIXA ###############################
+
+DELIMITER $$
+CREATE PROCEDURE pr_AbrirCaixa (nome VARCHAR(100), periodo VARCHAR(100), senha VARCHAR(20))
+BEGIN
+	DECLARE valorabertura DOUBLE;
+    DECLARE testesenha VARCHAR(20);
+    
+    SET valorabertura = (SELECT saldofinal_caixa FROM tb_caixa WHERE cod_caixa = (SELECT MAX(cod_caixa) FROM tb_caixa));
+    SET testesenha = (SELECT senha_func FROM tb_funcionario WHERE senha = senha_func limit 1);
+    
+    IF(senha = testesenha) THEN
+		INSERT INTO tb_caixa(cod_caixa, funcionario_caixa, periodo_caixa, senha_caixa, valorAbertura_caixa)
+		VALUES (null, nome, periodo, senha, valorabertura);
+    
+		SELECT 'Caixa aberto com sucesso' AS Confirmacao;
+    ELSE 
+		SELECT 'Senha incorreta, tente novamente' AS Erro_Senha;
+    END IF;
+	
+
+END $$ DELIMITER ;
+
+CALL pr_AbrirCaixa ('Victor Daniel', 'Matutino', '*******');
+
+select * from tb_caixa;
+
+###################### FECHAR CAIXA ###############################
+
+DELIMITER $$
+CREATE PROCEDURE pr_FecharCaixa (cod_caixaaberto int, saida DOUBLE)
+BEGIN
+    DECLARE valorabertura DOUBLE;
+    DECLARE valorfinal DOUBLE;
+    DECLARE valorentradas DOUBLE;
+    DECLARE valorsaida DOUBLE;
+    
+    SET valorabertura = (SELECT valorAbertura_caixa FROM tb_caixa WHERE cod_caixa = cod_caixaaberto);
+    SET valorentradas = (SELECT entradas_caixa FROM tb_caixa WHERE cod_caixa = cod_caixaaberto);
+    SET valorsaida = (SELECT saidas_caixa FROM tb_caixa WHERE cod_caixa = cod_caixaaberto);
+    
+    IF (valorentradas is null) then
+		SET valorentradas = 0;
+	END IF;
+    
+     IF (valorsaida is null) then
+		SET valorsaida= 0;
+	END IF;
+    
+    
+    SET valorsaida = saida + valorsaida;
+    
+    SET valorfinal = (valorabertura + valorentradas) - valorsaida;
+    
+	UPDATE tb_caixa SET saidas_caixa = valorsaida WHERE cod_caixa = cod_caixaaberto;
+	UPDATE tb_caixa SET saldofinal_caixa = valorfinal WHERE cod_caixa = cod_caixaaberto;
+    UPDATE tb_caixa SET entradas_caixa = valorentradas WHERE cod_caixa = cod_caixaaberto;
+    
+    SELECT 'Caixa aberto com sucesso' AS Confirmacao;
+
+END $$ DELIMITER ;
+
+CALL pr_FecharCaixa (3, 1);
+SELECT * FROM tb_caixa;
+
+###################### FAZER LOGIN ###############################
+
+DELIMITER $$
+CREATE PROCEDURE pr_Login (CPF VARCHAR(11), senha VARCHAR (20))
+BEGIN
+	DECLARE testecpf VARCHAR(11);
+    DECLARE testesenha VARCHAR(20);
+    
+    
+    SET testecpf = (SELECT cpf_pfisica FROM tb_pessoa_fisica WHERE CPF = cpf_pfisica );
+    SET testesenha = (SELECT senha_func FROM tb_funcionario WHERE senha = senha_func limit 1);
+    
+    IF(testecpf = CPF) THEN
+		IF(testesenha = senha) THEN
+			SELECT 'Bem Vindo!!!' AS Confirmacao;
+        ELSE
+			SELECT 'Senha Incorreta' AS Erro_Senha;
+        END IF;
+	ELSE
+		SELECT 'CPF Incorreto' AS Erro_CPF;
+    END IF;
+END $$ DELIMITER ;
+
+CALL pr_Login('05263259869', '*******');
+
+###################### LANÇAR GASTOS ###############################
+
+DELIMITER $$
+CREATE PROCEDURE pr_Lançar_Gastos (valor DOUBLE, descricao VARCHAR (100), caixa INT)
+BEGIN
+	DECLARE testecaixa INT;
+	DECLARE valorabertura DOUBLE;
+    DECLARE valorfinal DOUBLE;
+    DECLARE valorentradas DOUBLE;
+    DECLARE valorsaida DOUBLE;
+    
+    SET valorabertura = (SELECT saldofinal_caixa FROM tb_caixa WHERE cod_caixa = (caixa - 1));
+    SET valorentradas = (SELECT entradas_caixa FROM tb_caixa WHERE cod_caixa = caixa);
+    SET valorsaida = (SELECT saidas_caixa FROM tb_caixa WHERE cod_caixa = caixa);
+    SET testecaixa = (SELECT cod_caixa FROM tb_caixa WHERE cod_caixa = caixa);
+   
+	IF(testecaixa = caixa) THEN
+		IF (valorabertura is null) then
+			SET valorabertura = 0;
+		END IF;
+    
+		IF (valorentradas is null) then
+			SET valorentradas = 0;
+		END IF;
+    
+		IF (valorsaida is null) then
+			SET valorsaida= 0;
+		END IF;
+    
+		SET valorsaida = valor + valorsaida;
+		SET valorfinal = (valorabertura + valorentradas) - valorsaida;
+        
+        UPDATE tb_caixa SET saldofinal_caixa = valorfinal WHERE cod_caixa = caixa;
+        UPDATE tb_caixa SET saidas_caixa = valorsaida WHERE cod_caixa = caixa;
+        UPDATE tb_caixa SET valorAbertura_caixa = valorabertura WHERE cod_caixa = caixa;
+        
+		INSERT INTO tb_gasto VALUES (null, descricao, valor, now(), caixa);
+        
+		
+        
+        SELECT 'Gasto Adicionado' AS Confirmacao;
+    ELSE
+		SELECT 'Informe um Caixa Aberto' AS Confirmacao;
+    END IF;
+	
+END $$ DELIMITER ;
+
+CALL pr_Lançar_Gastos (10, 'Compra de remaça de Sorvete KiBom', 3);
+CALL pr_Lançar_Gastos (5, 'Devolução de produto', 2);
+CALL pr_Lançar_Gastos (5, 'Devolução de produto', 1);
+select * from tb_gasto;
+select * from tb_caixa;
